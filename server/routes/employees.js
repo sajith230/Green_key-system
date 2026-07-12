@@ -1,6 +1,7 @@
 const express = require('express');
 const Employee = require('../models/Employee');
 const auth = require('../middleware/auth');
+const { generateAppointmentLetterPDF } = require('../utils/pdfGenerator');
 
 const router = express.Router();
 
@@ -8,6 +9,22 @@ router.get('/', auth, async (req, res) => {
   try {
     const employees = await Employee.find().sort({ name: 1 });
     res.json(employees);
+  } catch (err) {
+    res.status(500).json({ message: err.message });
+  }
+});
+
+router.get('/:id/appointment-letter/pdf', auth, async (req, res) => {
+  try {
+    const employee = await Employee.findById(req.params.id);
+    if (!employee) return res.status(404).json({ message: 'Employee not found' });
+
+    const pdf = await generateAppointmentLetterPDF(employee);
+    const filename = `appointment_letter_${employee.name.replace(/\s+/g, '_')}.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(pdf);
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
