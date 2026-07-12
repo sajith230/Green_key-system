@@ -1,0 +1,18 @@
+{
+  "default_branch": "main",
+  "branches": [
+    "PDF-GENERATE",
+    "main",
+    "origin"
+  ],
+  "parent": {
+    "PDF-GENERATE": "main",
+    "main": null,
+    "origin": "main"
+  },
+  "order": [
+    "main",
+    "PDF-GENERATE",
+    "origin"
+  ]
+}

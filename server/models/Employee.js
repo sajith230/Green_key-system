@@ -7,6 +7,7 @@ const employeeSchema = new mongoose.Schema({
   nic: { type: String, default: '' },
   basicSalary: { type: Number, required: true, min: 0 },
   joinDate: { type: Date, default: Date.now },
+  probationPeriodMonths: { type: Number, default: 6, min: 1, max: 24 },
   isActive: { type: Boolean, default: true },
 }, { timestamps: true });
 
