@@ -82,6 +82,83 @@ router.post('/bookings', auth, async (req, res) => {
   }
 });
 
+router.put('/bookings/:id', auth, async (req, res) => {
+  try {
+    const booking = await RoomBooking.findById(req.params.id);
+    if (!booking) return res.status(404).json({ message: 'Booking not found' });
+
+    const {
+      room,
+      guestName,
+      guestIdNumber,
+      guestAddress,
+      guestPhone,
+      checkIn,
+      checkOut,
+      nights,
+      pricePerNight,
+      amount,
+      paymentMethod,
+      note,
+    } = req.body;
+
+    const newRoom = await Room.findById(room);
+    if (!newRoom) return res.status(404).json({ message: 'Room not found' });
+
+    const oldRoomId = booking.room.toString();
+    const newRoomId = newRoom._id.toString();
+    const roomChanged = oldRoomId !== newRoomId;
+
+    if (booking.status === 'active' && roomChanged && newRoom.status !== 'available') {
+      return res.status(400).json({ message: 'The selected room is not available' });
+    }
+
+    const onlinePayment = isOnlineRoomPayment(paymentMethod);
+    const transactionData = {
+      type: 'deposit',
+      amount: Number(amount),
+      description: `${newRoom.roomNumber} - ${guestName} - online payment`,
+    };
+
+    if (onlinePayment && booking.bankTransactionId) {
+      await BankTransaction.findByIdAndUpdate(booking.bankTransactionId, transactionData);
+    } else if (onlinePayment) {
+      const bankTx = await BankTransaction.create({
+        ...transactionData,
+        date: normalizeTransactionDateTime(new Date()),
+      });
+      booking.bankTransactionId = bankTx._id;
+    } else if (booking.bankTransactionId) {
+      await BankTransaction.findByIdAndDelete(booking.bankTransactionId);
+      booking.bankTransactionId = undefined;
+    }
+
+    booking.room = room;
+    booking.guestName = guestName;
+    booking.guestIdNumber = guestIdNumber;
+    booking.guestAddress = guestAddress;
+    booking.guestPhone = guestPhone;
+    booking.checkIn = checkIn;
+    booking.checkOut = checkOut;
+    booking.nights = nights;
+    booking.pricePerNight = pricePerNight;
+    booking.amount = amount;
+    booking.paymentMethod = paymentMethod;
+    booking.note = note;
+    await booking.save();
+
+    if (booking.status === 'active' && roomChanged) {
+      await Room.findByIdAndUpdate(oldRoomId, { status: 'available' });
+      await Room.findByIdAndUpdate(newRoomId, { status: 'occupied' });
+    }
+
+    const populated = await booking.populate('room', 'roomNumber type');
+    res.json(populated);
+  } catch (err) {
+    res.status(400).json({ message: err.message });
+  }
+});
+
 router.put('/bookings/:id/checkout', auth, async (req, res) => {
   try {
     const booking = await RoomBooking.findByIdAndUpdate(

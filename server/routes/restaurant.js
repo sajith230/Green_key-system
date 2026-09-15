@@ -1,6 +1,11 @@
 const express = require('express');
 const RestaurantOrder = require('../models/RestaurantOrder');
 const auth = require('../middleware/auth');
+const {
+  reduceStockForOrderItems,
+  restoreStockForOrder,
+  validateDrinkStock,
+} = require('../utils/drinkStock');
 
 const router = express.Router();
 
@@ -24,9 +29,22 @@ router.get('/', auth, async (req, res) => {
 
 router.post('/', auth, async (req, res) => {
   try {
+    const stockError = await validateDrinkStock(req.body.items);
+    if (stockError) {
+      return res.status(400).json({ message: stockError });
+    }
+
     const count = await RestaurantOrder.countDocuments();
     const orderNumber = `RST-${String(count + 1).padStart(4, '0')}`;
     const order = await RestaurantOrder.create({ ...req.body, orderNumber });
+
+    try {
+      await reduceStockForOrderItems(order.items, order);
+    } catch (stockErr) {
+      await RestaurantOrder.findByIdAndDelete(order._id);
+      return res.status(400).json({ message: stockErr.message });
+    }
+
     res.status(201).json(order);
   } catch (err) {
     res.status(400).json({ message: err.message });
@@ -45,6 +63,10 @@ router.put('/:id', auth, async (req, res) => {
 
 router.delete('/:id', auth, async (req, res) => {
   try {
+    const order = await RestaurantOrder.findById(req.params.id);
+    if (!order) return res.status(404).json({ message: 'Order not found' });
+
+    await restoreStockForOrder(order);
     await RestaurantOrder.findByIdAndDelete(req.params.id);
     res.json({ message: 'Order deleted' });
   } catch (err) {

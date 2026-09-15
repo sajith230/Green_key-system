@@ -8,7 +8,7 @@ const cashierTransactionSchema = new mongoose.Schema({
   },
   category: {
     type: String,
-    enum: ['room_bill', 'restaurant_bill', 'daily_cost', 'bank_deposit', 'opening_balance', 'salary_advance', 'salary_payment', 'other_income', 'other_expense'],
+    enum: ['room_bill', 'restaurant_bill', 'daily_cost', 'bank_deposit', 'opening_balance', 'salary_advance', 'salary_payment', 'company_loan', 'loan_repayment', 'other_income', 'other_expense', 'madam_cash_in', 'madam_cash_payment', 'madam_cash_return'],
     required: true,
   },
   amount: { type: Number, required: true, min: 0 },

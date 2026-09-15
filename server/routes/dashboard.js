@@ -8,6 +8,8 @@ const BankTransaction = require('../models/BankTransaction');
 const Advance = require('../models/Advance');
 const SalaryPayment = require('../models/SalaryPayment');
 const PendingBill = require('../models/PendingBill');
+const KotOrder = require('../models/KotOrder');
+const PettyCashTransaction = require('../models/PettyCashTransaction');
 const auth = require('../middleware/auth');
 const { getDayRange, buildDailyCashierData } = require('../utils/cashierBalance');
 const { buildDailyDirectDeposits } = require('../utils/bankBalance');
@@ -19,6 +21,12 @@ const { generateMonthEndReportPDF } = require('../utils/monthEndReportPdf');
 
 const router = express.Router();
 
+function aggStats(result, valueKey = 'total') {
+  const row = result[0];
+  if (!row) return { count: 0, total: 0 };
+  return { count: row.count || 0, total: row[valueKey] || 0 };
+}
+
 router.get('/', auth, async (req, res) => {
   try {
     const { start, end, dateStr } = getDayRange();
@@ -26,20 +34,61 @@ router.get('/', auth, async (req, res) => {
     const [
       totalRooms,
       occupiedRooms,
+      activeEmployees,
+      totalEmployees,
+      roomStats,
+      restaurantStats,
+      pendingStats,
+      salaryPaymentStats,
+      advanceStats,
+      bankDepositStats,
+      cashierTxCount,
+      pettyCashTxCount,
       todayRoomBookings,
       todayRestaurantOrders,
-      activeEmployees,
       todayTransactions,
       pendingBills,
     ] = await Promise.all([
       Room.countDocuments(),
       Room.countDocuments({ status: 'occupied' }),
+      Employee.countDocuments({ isActive: true }),
+      Employee.countDocuments(),
+      RoomBooking.aggregate([
+        { $match: { status: { $ne: 'cancelled' } } },
+        { $group: { _id: null, count: { $sum: 1 }, revenue: { $sum: '$amount' } } },
+      ]),
+      RestaurantOrder.aggregate([
+        { $match: { status: 'completed' } },
+        { $group: { _id: null, count: { $sum: 1 }, revenue: { $sum: '$total' } } },
+      ]),
+      PendingBill.aggregate([
+        { $match: { status: 'pending' } },
+        { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$amount' } } },
+      ]),
+      SalaryPayment.aggregate([
+        { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$netSalary' } } },
+      ]),
+      Advance.aggregate([
+        { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$amount' } } },
+      ]),
+      BankTransaction.aggregate([
+        { $match: { type: 'deposit' } },
+        { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$amount' } } },
+      ]),
+      CashierTransaction.countDocuments(),
+      PettyCashTransaction.countDocuments(),
       RoomBooking.find({ createdAt: { $gte: start, $lte: end }, status: { $ne: 'cancelled' } }),
       RestaurantOrder.find({ createdAt: { $gte: start, $lte: end }, status: 'completed' }),
-      Employee.countDocuments({ isActive: true }),
       CashierTransaction.find({ date: { $gte: start, $lte: end } }),
       fetchPendingBillsForDate(PendingBill, dateStr),
     ]);
+
+    const roomTotals = aggStats(roomStats, 'revenue');
+    const restaurantTotals = aggStats(restaurantStats, 'revenue');
+    const pendingTotals = aggStats(pendingStats);
+    const salaryTotals = aggStats(salaryPaymentStats);
+    const advanceTotals = aggStats(advanceStats);
+    const bankTotals = aggStats(bankDepositStats);
 
     const cashier = buildDailyCashierData({
       roomBookings: todayRoomBookings,
@@ -50,6 +99,20 @@ router.get('/', auth, async (req, res) => {
     res.json({
       date: dateStr,
       rooms: { total: totalRooms, occupied: occupiedRooms, available: totalRooms - occupiedRooms },
+      businessTotals: {
+        rooms: totalRooms,
+        employees: { active: activeEmployees, total: totalEmployees },
+        roomBookings: { count: roomTotals.count, revenue: roomTotals.total },
+        restaurantOrders: { count: restaurantTotals.count, revenue: restaurantTotals.total },
+        totalRevenue: roomTotals.total + restaurantTotals.total,
+        totalTransactions: roomTotals.count + restaurantTotals.count,
+        salaryPayments: { count: salaryTotals.count, total: salaryTotals.total },
+        salaryAdvances: { count: advanceTotals.count, total: advanceTotals.total },
+        pendingBills: { count: pendingTotals.count, total: pendingTotals.total },
+        bankDeposits: { count: bankTotals.count, total: bankTotals.total },
+        cashierTransactions: cashierTxCount,
+        pettyCashTransactions: pettyCashTxCount,
+      },
       today: {
         roomBookings: todayRoomBookings.length,
         roomRevenue: cashier.roomIncome,
@@ -84,9 +147,10 @@ router.get('/daily-report', auth, async (req, res) => {
     const { date } = req.query;
     const { start, end, dateStr } = getDayRange(date);
 
-    const [roomBookings, restaurantOrders, transactions, salaryAdvances, bankTransactions, pendingBills] = await Promise.all([
+    const [roomBookings, restaurantOrders, kotOrders, transactions, salaryAdvances, bankTransactions, pendingBills] = await Promise.all([
       RoomBooking.find({ createdAt: { $gte: start, $lte: end }, status: { $ne: 'cancelled' } }).populate('room', 'roomNumber type'),
       RestaurantOrder.find({ createdAt: { $gte: start, $lte: end }, status: 'completed' }),
+      KotOrder.find({ date: { $gte: start, $lte: end }, status: { $ne: 'cancelled' } }).sort({ createdAt: -1 }),
       CashierTransaction.find({ date: { $gte: start, $lte: end } }),
       Advance.find({ date: { $gte: start, $lte: end } }).populate('employee', 'name position basicSalary').sort({ date: -1 }),
       BankTransaction.find({ type: 'deposit', date: { $gte: start, $lte: end } }),
@@ -101,6 +165,16 @@ router.get('/daily-report', auth, async (req, res) => {
       date: dateStr,
       room: { bookings: roomBookings, count: roomBookings.length, revenue: cashier.roomIncome },
       restaurant: { orders: restaurantOrders, count: restaurantOrders.length, revenue: cashier.restaurantIncome },
+      kot: {
+        orders: kotOrders,
+        count: kotOrders.length,
+        totalItems: kotOrders.reduce((s, o) => s + o.items.reduce((is, i) => is + i.quantity, 0), 0),
+        byStatus: {
+          pending: kotOrders.filter((o) => o.status === 'pending').length,
+          preparing: kotOrders.filter((o) => o.status === 'preparing').length,
+          served: kotOrders.filter((o) => o.status === 'served').length,
+        },
+      },
       salary: {
         advances: salaryAdvances,
         count: salaryAdvances.length,
@@ -137,9 +211,10 @@ router.get('/daily-report/pdf', auth, async (req, res) => {
     const { date, type = 'full' } = req.query;
     const { start, end, dateStr } = getDayRange(date);
 
-    const [roomBookings, restaurantOrders, transactions, salaryAdvances, bankTransactions, pendingBills] = await Promise.all([
+    const [roomBookings, restaurantOrders, kotOrders, transactions, salaryAdvances, bankTransactions, pendingBills] = await Promise.all([
       RoomBooking.find({ createdAt: { $gte: start, $lte: end }, status: { $ne: 'cancelled' } }).populate('room', 'roomNumber type'),
       RestaurantOrder.find({ createdAt: { $gte: start, $lte: end }, status: 'completed' }),
+      KotOrder.find({ date: { $gte: start, $lte: end }, status: { $ne: 'cancelled' } }).sort({ createdAt: -1 }),
       CashierTransaction.find({ date: { $gte: start, $lte: end } }),
       Advance.find({ date: { $gte: start, $lte: end } }).populate('employee', 'name position').sort({ date: -1 }),
       BankTransaction.find({ type: 'deposit', date: { $gte: start, $lte: end } }),
@@ -152,6 +227,11 @@ router.get('/daily-report/pdf', auth, async (req, res) => {
       date: dateStr,
       room: { bookings: roomBookings, count: roomBookings.length },
       restaurant: { orders: restaurantOrders, count: restaurantOrders.length },
+      kot: {
+        orders: kotOrders,
+        count: kotOrders.length,
+        totalItems: kotOrders.reduce((s, o) => s + o.items.reduce((is, i) => is + i.quantity, 0), 0),
+      },
       salary: {
         advances: salaryAdvances,
         count: salaryAdvances.length,
@@ -181,6 +261,7 @@ async function fetchMonthEndData(month, year) {
     totalRooms,
     roomBookings,
     restaurantOrders,
+    kotOrders,
     transactions,
     salaryAdvances,
     salaryPayments,
@@ -190,6 +271,7 @@ async function fetchMonthEndData(month, year) {
     Room.countDocuments(),
     RoomBooking.find({ createdAt: { $gte: start, $lte: end }, status: { $ne: 'cancelled' } }).populate('room', 'roomNumber type'),
     RestaurantOrder.find({ createdAt: { $gte: start, $lte: end }, status: 'completed' }),
+    KotOrder.find({ date: { $gte: start, $lte: end }, status: { $ne: 'cancelled' } }),
     CashierTransaction.find({ date: { $gte: start, $lte: end } }),
     Advance.find({ month: Number(month), year: Number(year) }).populate('employee', 'name position').sort({ date: -1 }),
     SalaryPayment.find({ month: Number(month), year: Number(year) }).populate('employee', 'name position').sort({ paidDate: -1 }),
@@ -202,6 +284,7 @@ async function fetchMonthEndData(month, year) {
     year,
     roomBookings,
     restaurantOrders,
+    kotOrders,
     transactions,
     salaryAdvances,
     salaryPayments,

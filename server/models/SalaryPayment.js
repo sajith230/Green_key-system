@@ -6,6 +6,7 @@ const salaryPaymentSchema = new mongoose.Schema({
   year: { type: Number, required: true },
   basicSalary: { type: Number, required: true },
   totalAdvances: { type: Number, default: 0 },
+  loanPayment: { type: Number, default: 0 },
   deductions: { type: Number, default: 0 },
   bonuses: { type: Number, default: 0 },
   netSalary: { type: Number, required: true },

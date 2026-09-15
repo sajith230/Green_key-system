@@ -12,6 +12,11 @@ const cashierRoutes = require('./routes/cashier');
 const bankRoutes = require('./routes/bank');
 const dashboardRoutes = require('./routes/dashboard');
 const pettyCashRoutes = require('./routes/pettyCash');
+const madamCashRoutes = require('./routes/madamCash');
+const drinkRoutes = require('./routes/drinks');
+const mealRoutes = require('./routes/meals');
+const loanRoutes = require('./routes/loans');
+const kotRoutes = require('./routes/kot');
 
 const app = express();
 
@@ -29,6 +34,11 @@ app.use('/api/cashier', cashierRoutes);
 app.use('/api/bank', bankRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/petty-cash', pettyCashRoutes);
+app.use('/api/madam-cash', madamCashRoutes);
+app.use('/api/drinks', drinkRoutes);
+app.use('/api/meals', mealRoutes);
+app.use('/api/loans', loanRoutes);
+app.use('/api/kot', kotRoutes);
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', hotel: 'Green Key Pvt' });

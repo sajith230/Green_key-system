@@ -60,6 +60,7 @@ function buildDailyBuckets({ year, month, daysInMonth }) {
       netCash: 0,
       roomBookings: 0,
       restaurantOrders: 0,
+      kotOrders: 0,
     };
   }
   return buckets;
@@ -70,6 +71,7 @@ function buildMonthEndReport({
   year,
   roomBookings,
   restaurantOrders,
+  kotOrders = [],
   transactions,
   salaryAdvances,
   salaryPayments,
@@ -111,6 +113,7 @@ function buildMonthEndReport({
 
     const dayBookings = roomBookings.filter((b) => dateInRange(b.createdAt, dayStart, dayEnd));
     const dayOrders = restaurantOrders.filter((o) => dateInRange(o.createdAt, dayStart, dayEnd));
+    const dayKots = kotOrders.filter((k) => dateInRange(k.date, dayStart, dayEnd));
     const dayTx = transactions.filter((t) => dateInRange(t.date, dayStart, dayEnd));
     const dayCashier = buildDailyCashierData({
       roomBookings: dayBookings,
@@ -132,6 +135,7 @@ function buildMonthEndReport({
       netCash: dayCashier.dayCashIn - dayCashier.totalCashOut,
       roomBookings: dayBookings.length,
       restaurantOrders: dayOrders.length,
+      kotOrders: dayKots.length,
     };
   }
 

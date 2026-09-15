@@ -8,6 +8,7 @@ const auth = require('../middleware/auth');
 const { computeBalance, getMonthYearFromDate } = require('../utils/pettyCashBalance');
 const { generatePaysheetPDF, generateAdvancePDF, MONTHS } = require('../utils/pdfGenerator');
 const { normalizeTransactionDate, normalizeTransactionDateTime } = require('../utils/cashierBalance');
+const { getEmployeeLoanSummary, applyLoanPayment, reverseLoanPaymentsForSalary } = require('../utils/loanBalance');
 
 const router = express.Router();
 
@@ -314,13 +315,15 @@ router.delete('/payments/:id', auth, async (req, res) => {
     const payment = await SalaryPayment.findById(req.params.id);
     if (!payment) return res.status(404).json({ message: 'Salary payment not found' });
 
+    await reverseLoanPaymentsForSalary(payment._id);
+
     await CashierTransaction.deleteMany({
       category: 'salary_payment',
       reference: payment._id.toString(),
     });
 
     await SalaryPayment.findByIdAndDelete(payment._id);
-    res.json({ message: 'Salary payment deleted and cashier entry removed' });
+    res.json({ message: 'Salary payment deleted, loan balance restored, and cashier entry removed' });
   } catch (err) {
     res.status(500).json({ message: err.message });
   }
@@ -350,6 +353,7 @@ router.get('/calculate/:employeeId', auth, async (req, res) => {
     if (!summary) return res.status(404).json({ message: 'Employee not found' });
 
     const existing = await SalaryPayment.findOne({ employee: req.params.employeeId, month: m, year: y });
+    const loanSummary = await getEmployeeLoanSummary(req.params.employeeId);
 
     res.json({
       employee: summary.employee,
@@ -359,8 +363,11 @@ router.get('/calculate/:employeeId', auth, async (req, res) => {
       advances: summary.advances,
       totalAdvances: summary.totalAdvances,
       leftover: summary.leftover,
+      loans: loanSummary.loans,
+      totalLoanRemaining: loanSummary.totalRemaining,
       deductions: 0,
       bonuses: 0,
+      loanPayment: 0,
       netSalary: summary.basicSalary - summary.totalAdvances,
       alreadyPaid: !!existing,
       existingPayment: existing,
@@ -372,14 +379,15 @@ router.get('/calculate/:employeeId', auth, async (req, res) => {
 
 router.post('/pay', auth, async (req, res) => {
   try {
-    const { employeeId, month, year, deductions, bonuses, note } = req.body;
+    const { employeeId, month, year, deductions, bonuses, note, loanPayment, loanId } = req.body;
     const m = Number(month);
     const y = Number(year);
     const employee = await Employee.findById(employeeId);
     if (!employee) return res.status(404).json({ message: 'Employee not found' });
 
     const summary = await getEmployeeAdvanceSummary(employeeId, m, y);
-    const netSalary = employee.basicSalary + (bonuses || 0) - summary.totalAdvances - (deductions || 0);
+    const loanPayAmount = Number(loanPayment) || 0;
+    const netSalary = employee.basicSalary + (bonuses || 0) - summary.totalAdvances - (deductions || 0) - loanPayAmount;
 
     const existing = await SalaryPayment.findOne({ employee: employeeId, month: m, year: y });
     if (existing) {
@@ -390,17 +398,66 @@ router.post('/pay', auth, async (req, res) => {
       return res.status(400).json({ message: 'Net salary cannot be negative' });
     }
 
+    let loansToPay = [];
+    if (loanPayAmount > 0) {
+      const loanSummary = await getEmployeeLoanSummary(employeeId);
+      if (loanSummary.loans.length === 0) {
+        return res.status(400).json({ message: 'No active loan found for this employee' });
+      }
+      if (loanPayAmount > loanSummary.totalRemaining) {
+        return res.status(400).json({
+          message: `Loan payment exceeds remaining balance. Remaining: Rs. ${loanSummary.totalRemaining.toLocaleString()}`,
+        });
+      }
+
+      if (loanId) {
+        const loan = loanSummary.loans.find((l) => l._id.toString() === loanId.toString());
+        if (!loan) {
+          return res.status(404).json({ message: 'Loan not found for this employee' });
+        }
+        if (loanPayAmount > loan.remainingBalance) {
+          return res.status(400).json({
+            message: `Loan payment exceeds remaining balance. Remaining: Rs. ${loan.remainingBalance.toLocaleString()}`,
+          });
+        }
+        loansToPay = [{ loan, amount: loanPayAmount }];
+      } else {
+        let left = loanPayAmount;
+        for (const loan of loanSummary.loans) {
+          if (left <= 0) break;
+          const portion = Math.min(left, loan.remainingBalance);
+          loansToPay.push({ loan, amount: portion });
+          left = Math.round((left - portion) * 100) / 100;
+        }
+      }
+    }
+
     const payment = await SalaryPayment.create({
       employee: employeeId,
       month: m,
       year: y,
       basicSalary: employee.basicSalary,
       totalAdvances: summary.totalAdvances,
+      loanPayment: loanPayAmount,
       deductions: deductions || 0,
       bonuses: bonuses || 0,
       netSalary,
       note: note || '',
     });
+
+    for (const item of loansToPay) {
+      await applyLoanPayment({
+        loan: item.loan,
+        amount: item.amount,
+        employeeId,
+        month: m,
+        year: y,
+        source: 'salary',
+        note: `Salary deduction — ${MONTHS[m - 1]} ${y}`,
+        salaryPaymentId: payment._id,
+        date: new Date(),
+      });
+    }
 
     if (netSalary > 0) {
       await CashierTransaction.create({

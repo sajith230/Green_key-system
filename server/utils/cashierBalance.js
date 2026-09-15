@@ -65,8 +65,13 @@ function buildDailyCashierData({ roomBookings, restaurantOrders, transactions })
   const dailyCosts = transactions.filter((t) => t.category === 'daily_cost' || (t.type === 'expense' && t.category === 'other_expense'));
   const salaryAdvances = transactions.filter((t) => t.category === 'salary_advance');
   const salaryPayments = transactions.filter((t) => t.category === 'salary_payment');
+  const companyLoans = transactions.filter((t) => t.category === 'company_loan');
+  const loanRepayments = transactions.filter((t) => t.category === 'loan_repayment');
   const bankDeposits = transactions.filter((t) => t.category === 'bank_deposit' || t.type === 'bank_deposit');
-  const otherIncome = transactions.filter((t) => t.type === 'income' && !['room_bill', 'restaurant_bill', 'opening_balance'].includes(t.category));
+  const madamCashIn = transactions.filter((t) => t.category === 'madam_cash_in');
+  const madamCashPayments = transactions.filter((t) => t.category === 'madam_cash_payment');
+  const madamCashReturns = transactions.filter((t) => t.category === 'madam_cash_return');
+  const otherIncome = transactions.filter((t) => t.type === 'income' && !['room_bill', 'restaurant_bill', 'opening_balance', 'madam_cash_in', 'loan_repayment'].includes(t.category));
 
   const openingBalance = openingBalances.reduce((s, t) => s + t.amount, 0);
   const systemRoomIncome = 0;
@@ -76,14 +81,19 @@ function buildDailyCashierData({ roomBookings, restaurantOrders, transactions })
   const totalDailyCost = dailyCosts.reduce((s, t) => s + t.amount, 0);
   const totalSalaryAdvance = salaryAdvances.reduce((s, t) => s + t.amount, 0);
   const totalSalaryPayment = salaryPayments.reduce((s, t) => s + t.amount, 0);
+  const totalCompanyLoan = companyLoans.reduce((s, t) => s + t.amount, 0);
+  const totalLoanRepayment = loanRepayments.reduce((s, t) => s + t.amount, 0);
   const totalBankDeposit = bankDeposits.reduce((s, t) => s + t.amount, 0);
-  const totalOtherIncome = otherIncome.reduce((s, t) => s + t.amount, 0);
+  const totalMadamCashIn = madamCashIn.reduce((s, t) => s + t.amount, 0);
+  const totalMadamCashPayment = madamCashPayments.reduce((s, t) => s + t.amount, 0);
+  const totalMadamCashReturn = madamCashReturns.reduce((s, t) => s + t.amount, 0);
+  const totalOtherIncome = otherIncome.reduce((s, t) => s + t.amount, 0) + totalMadamCashIn + totalLoanRepayment;
 
   const totalRoomIncome = systemRoomIncome + manualRoomIncome;
   const totalRestaurantIncome = systemRestaurantIncome + manualRestaurantIncome;
   const dayCashIn = totalRoomIncome + totalRestaurantIncome + totalOtherIncome;
   const totalCashIn = openingBalance + dayCashIn;
-  const totalCashOut = totalDailyCost + totalSalaryAdvance + totalSalaryPayment + totalBankDeposit;
+  const totalCashOut = totalDailyCost + totalSalaryAdvance + totalSalaryPayment + totalCompanyLoan + totalBankDeposit + totalMadamCashPayment + totalMadamCashReturn;
   const cashBalance = totalCashIn - totalCashOut;
 
   const ledger = [];
@@ -120,7 +130,7 @@ function buildDailyCashierData({ roomBookings, restaurantOrders, transactions })
   });
 
   transactions.filter((t) => t.category !== 'opening_balance').forEach((t) => {
-    const isOut = t.type === 'expense' || t.type === 'bank_deposit' || t.category === 'bank_deposit' || t.category === 'daily_cost' || t.category === 'other_expense' || t.category === 'salary_advance' || t.category === 'salary_payment';
+    const isOut = t.type === 'expense' || t.type === 'bank_deposit' || t.category === 'bank_deposit' || t.category === 'daily_cost' || t.category === 'other_expense' || t.category === 'salary_advance' || t.category === 'salary_payment' || t.category === 'company_loan' || t.category === 'madam_cash_payment' || t.category === 'madam_cash_return';
     const labels = {
       room_bill: 'Room Bill',
       restaurant_bill: 'Restaurant Bill',
@@ -128,16 +138,24 @@ function buildDailyCashierData({ roomBookings, restaurantOrders, transactions })
       bank_deposit: 'Bank Deposit',
       salary_advance: 'Salary Advance',
       salary_payment: 'Salary Payment',
+      company_loan: 'Company Loan',
+      loan_repayment: 'Loan Repayment',
       other_income: 'Other Income',
       other_expense: 'Other Expense',
+      madam_cash_in: 'Madam Cash In',
+      madam_cash_payment: 'Madam Cash Payment',
+      madam_cash_return: 'Madam Cash Return',
     };
     const isSalaryAdvance = t.category === 'salary_advance';
     const isSalaryPayment = t.category === 'salary_payment';
+    const isCompanyLoan = t.category === 'company_loan';
+    const isLoanRepayment = t.category === 'loan_repayment';
+    const isMadamCash = ['madam_cash_in', 'madam_cash_payment', 'madam_cash_return'].includes(t.category);
     const salaryDeleteType = isSalaryAdvance ? 'advance' : isSalaryPayment ? 'payment' : null;
 
     ledger.push({
       id: t._id,
-      source: isSalaryAdvance || isSalaryPayment ? 'salary' : 'manual',
+      source: isSalaryAdvance || isSalaryPayment ? 'salary' : isCompanyLoan || isLoanRepayment ? 'loan' : isMadamCash ? 'madam_cash' : 'manual',
       flow: isOut ? 'out' : 'in',
       category: t.category,
       label: labels[t.category] || t.category,
@@ -147,7 +165,7 @@ function buildDailyCashierData({ roomBookings, restaurantOrders, transactions })
       paymentMethod: t.paymentMethod || 'cash',
       canDelete: salaryDeleteType ? Boolean(t.reference) : true,
       deleteType: salaryDeleteType || 'transaction',
-      referenceId: salaryDeleteType ? t.reference : undefined,
+      referenceId: (salaryDeleteType || isCompanyLoan || isLoanRepayment) ? t.reference : undefined,
     });
   });
 
@@ -162,6 +180,9 @@ function buildDailyCashierData({ roomBookings, restaurantOrders, transactions })
     salaryAdvance: totalSalaryAdvance,
     salaryPayment: totalSalaryPayment,
     bankDeposit: totalBankDeposit,
+    madamCashIn: totalMadamCashIn,
+    madamCashPayment: totalMadamCashPayment,
+    madamCashReturn: totalMadamCashReturn,
     dayCashIn,
     totalCashIn,
     totalCashOut,
@@ -173,6 +194,9 @@ function buildDailyCashierData({ roomBookings, restaurantOrders, transactions })
       salaryAdvances: salaryAdvances.length,
       salaryPayments: salaryPayments.length,
       bankDeposits: bankDeposits.length,
+      madamCashIn: madamCashIn.length,
+      madamCashPayments: madamCashPayments.length,
+      madamCashReturns: madamCashReturns.length,
       openingBalances: openingBalances.length,
     },
     breakdown: {

@@ -6,10 +6,14 @@ const RoomBooking = require('../models/RoomBooking');
 const RestaurantOrder = require('../models/RestaurantOrder');
 const Advance = require('../models/Advance');
 const SalaryPayment = require('../models/SalaryPayment');
+const MadamCashTransaction = require('../models/MadamCashTransaction');
+const EmployeeLoan = require('../models/EmployeeLoan');
+const LoanPayment = require('../models/LoanPayment');
 const auth = require('../middleware/auth');
 const { getDayRange, normalizeTransactionDate, normalizeTransactionDateTime, getPreviousDayClosing, buildDailyCashierData } = require('../utils/cashierBalance');
 const { fetchPendingBillsForDate, fetchPendingBillsHistory } = require('../utils/pendingBills');
 const { enrichLedgerDeleteInfo } = require('../utils/ledgerEnrich');
+const { reverseLoanPaymentsForSalary } = require('../utils/loanBalance');
 
 const router = express.Router();
 
@@ -164,11 +168,52 @@ router.delete('/transactions/:id', auth, async (req, res) => {
       if (!payment) {
         payment = await SalaryPayment.findOne({ netSalary: transaction.amount }).sort({ paidDate: -1 });
       }
-      if (payment) await SalaryPayment.findByIdAndDelete(payment._id);
+      if (payment) {
+        await reverseLoanPaymentsForSalary(payment._id);
+        await SalaryPayment.findByIdAndDelete(payment._id);
+      }
+    } else if (transaction.category === 'company_loan') {
+      const loan = await EmployeeLoan.findOne({
+        $or: [
+          { cashierTransactionId: transaction._id },
+          ...(transaction.reference ? [{ _id: transaction.reference }] : []),
+        ],
+      });
+      if (loan) {
+        const payments = await LoanPayment.find({ loan: loan._id });
+        if (payments.length > 0) {
+          return res.status(400).json({
+            message: 'Cannot delete loan disbursement — repayments already exist. Reverse repayments first.',
+          });
+        }
+        await EmployeeLoan.findByIdAndDelete(loan._id);
+      }
+    } else if (transaction.category === 'loan_repayment') {
+      const payment = await LoanPayment.findOne({
+        $or: [
+          { cashierTransactionId: transaction._id },
+          ...(transaction.reference ? [{ _id: transaction.reference }] : []),
+        ],
+      });
+      if (payment) {
+        if (payment.source === 'salary') {
+          return res.status(400).json({ message: 'Salary loan deductions must be reversed by deleting the salary payment' });
+        }
+        const loan = await EmployeeLoan.findById(payment.loan);
+        if (loan) {
+          loan.remainingBalance = Math.round((loan.remainingBalance + payment.amount) * 100) / 100;
+          if (loan.remainingBalance > loan.amount) loan.remainingBalance = loan.amount;
+          if (loan.remainingBalance > 0) loan.status = 'active';
+          await loan.save();
+        }
+        await LoanPayment.findByIdAndDelete(payment._id);
+      }
     } else if (transaction.bankTransactionId) {
       await BankTransaction.findByIdAndDelete(transaction.bankTransactionId);
     } else if (transaction.category === 'bank_deposit') {
       await BankTransaction.deleteOne({ cashierTransactionId: transaction._id });
+    } else if (['madam_cash_in', 'madam_cash_payment', 'madam_cash_return'].includes(transaction.category)) {
+      await MadamCashTransaction.deleteOne({ cashierTransactionId: transaction._id });
     }
 
     await CashierTransaction.findByIdAndDelete(req.params.id);

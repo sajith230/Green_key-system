@@ -57,8 +57,9 @@ function generatePaysheetPDF(payment, employee, advances) {
       ['Gross Salary', `Rs. ${(payment.basicSalary + (payment.bonuses || 0)).toLocaleString()}`],
       ['', ''],
       ['Advances Deducted', `Rs. ${payment.totalAdvances.toLocaleString()}`],
+      ['Loan Payment Deducted', `Rs. ${(payment.loanPayment || 0).toLocaleString()}`],
       ['Other Deductions', `Rs. ${(payment.deductions || 0).toLocaleString()}`],
-      ['Total Deductions', `Rs. ${(payment.totalAdvances + (payment.deductions || 0)).toLocaleString()}`],
+      ['Total Deductions', `Rs. ${(payment.totalAdvances + (payment.loanPayment || 0) + (payment.deductions || 0)).toLocaleString()}`],
     ];
 
     let y = 310;
